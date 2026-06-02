@@ -34,6 +34,11 @@
       </div>
 
       <div class="lobby-actions">
+        <div class="nickname-section">
+          <label for="nickname-input" class="nickname-label">你的昵称</label>
+          <input type="text" id="nickname-input" placeholder="给自己取个名字吧" maxlength="12" autocomplete="off">
+        </div>
+
         <div class="action-card" id="create-room-btn">
           <div class="action-icon">
             <svg width="32" height="32" viewBox="0 0 32 32" fill="none">
@@ -139,6 +144,17 @@
               </svg>
               复制
             </button>
+          </div>
+          <div class="member-list" id="member-list">
+            <div class="member-item">
+              <span class="member-dot me"></span>
+              <span class="member-name" id="my-name-display">我</span>
+              <span class="member-role">（房主）</span>
+            </div>
+            <div class="member-item" id="peer-member" style="display:none">
+              <span class="member-dot peer"></span>
+              <span class="member-name" id="peer-name-display">好友</span>
+            </div>
           </div>
         </div>
 

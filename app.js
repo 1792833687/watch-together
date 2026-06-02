@@ -1,8 +1,46 @@
 /**
  * Watch Together - 双人同步观影
  * P2P-based synchronized video watching with chat
- * Uses PeerJS for WebRTC signaling
+ * Uses PeerJS for WebRTC signaling with multiple fallback servers
  */
+
+// ============================================
+// CONFIG
+// ============================================
+const CONFIG = {
+  // Multiple signaling servers for reliability
+  signalServers: [
+    { host: '0.peerjs.com', port: 443, secure: true },
+    { host: 'peerjs-server.onrender.com', port: 443, secure: true },
+  ],
+  // TURN/STUN for NAT traversal
+  iceServers: [
+    { urls: 'stun:stun.l.google.com:19302' },
+    { urls: 'stun:stun1.l.google.com:19302' },
+    { urls: 'stun:stun2.l.google.com:19302' },
+    { urls: 'stun:stun3.l.google.com:19302' },
+    { urls: 'stun:stun4.l.google.com:19302' },
+    {
+      urls: 'turn:openrelay.metered.ca:80',
+      username: 'openrelayproject',
+      credential: 'openrelayproject',
+    },
+    {
+      urls: 'turn:openrelay.metered.ca:443',
+      username: 'openrelayproject',
+      credential: 'openrelayproject',
+    },
+    {
+      urls: 'turn:openrelay.metered.ca:443?transport=tcp',
+      username: 'openrelayproject',
+      credential: 'openrelayproject',
+    },
+  ],
+  connectTimeout: 30000,
+  heartbeatInterval: 5000,
+  syncInterval: 4000,
+  maxRetries: 3,
+};
 
 // ============================================
 // STATE
@@ -18,6 +56,11 @@ const State = {
   videoSource: null,
   videoUrl: null,
   isSyncing: false,
+  nickname: '',
+  peerNickname: '',
+  serverIndex: 0,
+  retryCount: 0,
+  heartbeatTimer: null,
 };
 
 // ============================================
@@ -32,6 +75,7 @@ const dom = {
   roomInfo: $('#room-info'),
   lobby: $('#lobby'),
   watchRoom: $('#watch-room'),
+  nicknameInput: $('#nickname-input'),
   roomIdInput: $('#room-id-input'),
   createRoomBtn: $('#create-room-btn'),
   joinRoomBtn: $('#join-room-btn'),
@@ -51,6 +95,10 @@ const dom = {
   chatInput: $('#chat-input'),
   chatSendBtn: $('#chat-send-btn'),
   toastContainer: $('#toast-container'),
+  myNameDisplay: $('#my-name-display'),
+  peerNameDisplay: $('#peer-name-display'),
+  peerMember: $('#peer-member'),
+  memberList: $('#member-list'),
 };
 
 // ============================================
@@ -65,6 +113,14 @@ function generateRoomId() {
   return id;
 }
 
+function generateNickname() {
+  const adjectives = ['快乐', '悠闲', '好奇', '酷酷', '暖暖', '萌萌', '静静', '闪闪'];
+  const nouns = ['小猫', '小狗', '小熊', '小兔', '小鱼', '小鸟', '星星', '月亮'];
+  const adj = adjectives[Math.floor(Math.random() * adjectives.length)];
+  const noun = nouns[Math.floor(Math.random() * nouns.length)];
+  return adj + noun;
+}
+
 function showToast(message, type) {
   if (type === void 0) type = 'success';
   var toast = document.createElement('div');
@@ -74,7 +130,7 @@ function showToast(message, type) {
   setTimeout(function () {
     toast.classList.add('removing');
     setTimeout(function () { toast.remove(); }, 200);
-  }, 3000);
+  }, 3500);
 }
 
 function formatTime(date) {
@@ -94,6 +150,12 @@ function setConnectionStatus(status) {
   dom.statusText.textContent = texts[status] || status;
 }
 
+function escapeHtml(text) {
+  var div = document.createElement('div');
+  div.textContent = text;
+  return div.innerHTML;
+}
+
 // ============================================
 // SCREEN MANAGEMENT
 // ============================================
@@ -104,25 +166,70 @@ function showScreen(screenId) {
 }
 
 // ============================================
-// PEER CONNECTION
+// NICKNAME
 // ============================================
+function getNickname() {
+  var input = dom.nicknameInput.value.trim();
+  if (!input) {
+    input = generateNickname();
+    dom.nicknameInput.value = input;
+  }
+  State.nickname = input;
+  dom.myNameDisplay.textContent = input;
+}
+
+// ============================================
+// PEER CONNECTION - Core
+// ============================================
+function createPeerOptions(customId) {
+  var opts = {
+    debug: 0,
+    config: { iceServers: CONFIG.iceServers },
+  };
+
+  var server = CONFIG.signalServers[State.serverIndex % CONFIG.signalServers.length];
+  if (server) {
+    opts.host = server.host;
+    opts.port = server.port;
+    opts.secure = server.secure;
+  }
+
+  if (customId) {
+    opts.key = undefined;
+    // For custom ID: use path-based approach
+    opts.path = '/';
+  }
+
+  return opts;
+}
+
 function setupConnection(conn) {
+  State.conn = conn;
+
   conn.on('open', function () {
     State.isConnected = true;
     State.isConnecting = false;
+    State.retryCount = 0;
     setConnectionStatus('connected');
+
+    // Send username immediately on connection open
+    sendMessage('hello', { nickname: State.nickname });
 
     if (State.isHost) {
       dom.roomInfo.textContent = '好友已加入房间';
-      addChatMessage('system', '好友加入了房间');
-      syncVideoState();
+      addChatMessage('system', '好友加入了房间，正在同步...');
+      // Sync video state if any
+      setTimeout(function () {
+        if (State.videoUrl) syncVideoState();
+      }, 500);
     } else {
       dom.roomInfo.textContent = '已加入房间';
-      addChatMessage('system', '成功加入房间');
+      addChatMessage('system', '成功加入房间，等待同步...');
     }
 
     showScreen('watch-room');
     updateRoomUI();
+    startHeartbeat();
   });
 
   conn.on('data', function (data) {
@@ -140,22 +247,46 @@ function setupConnection(conn) {
 }
 
 function handleDisconnect() {
+  stopHeartbeat();
   State.isConnected = false;
   State.isConnecting = false;
   State.conn = null;
   setConnectionStatus('offline');
   dom.roomInfo.textContent = '';
+  dom.peerMember.style.display = 'none';
   addChatMessage('system', '连接已断开');
+  showToast('连接已断开，请重新创建或加入房间', 'error');
   showScreen('lobby');
 }
 
 function sendMessage(type, payload) {
   if (payload === void 0) payload = {};
-  if (!State.conn || !State.isConnected) return;
+  if (!State.conn || !State.isConnected) return false;
   try {
     State.conn.send(Object.assign({ type: type, ts: Date.now() }, payload));
+    return true;
   } catch (e) {
     console.error('Send error:', e);
+    return false;
+  }
+}
+
+// ============================================
+// HEARTBEAT
+// ============================================
+function startHeartbeat() {
+  stopHeartbeat();
+  State.heartbeatTimer = setInterval(function () {
+    if (State.isConnected) {
+      sendMessage('heartbeat', {});
+    }
+  }, CONFIG.heartbeatInterval);
+}
+
+function stopHeartbeat() {
+  if (State.heartbeatTimer) {
+    clearInterval(State.heartbeatTimer);
+    State.heartbeatTimer = null;
   }
 }
 
@@ -164,6 +295,27 @@ function sendMessage(type, payload) {
 // ============================================
 function handleDataMessage(data) {
   switch (data.type) {
+    case 'hello':
+      // Received peer's nickname
+      if (data.nickname) {
+        State.peerNickname = data.nickname;
+        dom.peerNameDisplay.textContent = data.nickname;
+        dom.peerMember.style.display = 'flex';
+      }
+      // If host receives hello from joiner, send back hello
+      if (State.isHost) {
+        sendMessage('hello', { nickname: State.nickname });
+        // Also sync current video state
+        if (State.videoUrl) {
+          setTimeout(function () { syncVideoState(); }, 300);
+        }
+      }
+      break;
+
+    case 'heartbeat':
+      // Just acknowledge presence
+      break;
+
     case 'chat':
       addChatMessage('peer', data.text);
       break;
@@ -218,25 +370,46 @@ function handleDataMessage(data) {
 // ============================================
 // ROOM MANAGEMENT
 // ============================================
-// Strategy: Host creates peer with custom ID = "wt-" + roomId.
-// Joiner connects to "wt-" + roomId.
-
 function peerIdFromRoom(roomId) {
   return 'wt-' + roomId;
+}
+
+function destroyPeer() {
+  stopHeartbeat();
+  if (State.conn) {
+    try { State.conn.close(); } catch (e) {}
+    State.conn = null;
+  }
+  if (State.peer) {
+    try { State.peer.destroy(); } catch (e) {}
+    State.peer = null;
+  }
 }
 
 async function createRoom() {
   if (State.isConnecting) return;
 
+  getNickname();
+  destroyPeer();
+
   State.isConnecting = true;
   State.isHost = true;
   State.roomId = generateRoomId();
+  State.retryCount = 0;
+  State.serverIndex = 0;
   setConnectionStatus('connecting');
 
+  tryCreateHost();
+}
+
+function tryCreateHost() {
   var customId = peerIdFromRoom(State.roomId);
+  var opts = createPeerOptions();
+  // Set custom ID as peer id
+  opts.key = undefined;
 
   try {
-    State.peer = new Peer(customId, { debug: 0 });
+    State.peer = new Peer(customId, opts);
 
     State.peer.on('open', function (id) {
       State.peerId = id;
@@ -249,19 +422,31 @@ async function createRoom() {
     });
 
     State.peer.on('error', function (err) {
-      State.isConnecting = false;
-      setConnectionStatus('offline');
+      console.error('Peer error:', err.type, err.message);
 
       if (err.type === 'unavailable-id') {
-        // Retry with a new ID
+        // Try a different room ID
         State.peer.destroy();
+        State.peer = null;
         State.roomId = generateRoomId();
-        createRoom();
+        tryCreateHost();
         return;
       }
 
-      showToast('创建房间失败，请检查网络连接', 'error');
-      console.error(err);
+      if (err.type === 'network' || err.type === 'server-error' || err.type === 'socket-error') {
+        // Try next signaling server
+        State.serverIndex++;
+        if (State.peer) { State.peer.destroy(); State.peer = null; }
+        if (State.serverIndex < CONFIG.signalServers.length) {
+          showToast('切换信令服务器重试...');
+          setTimeout(function () { tryCreateHost(); }, 500);
+          return;
+        }
+      }
+
+      State.isConnecting = false;
+      setConnectionStatus('offline');
+      showToast('创建房间失败，请检查网络后重试', 'error');
     });
 
     State.peer.on('connection', function (conn) {
@@ -274,8 +459,9 @@ async function createRoom() {
     });
 
     State.peer.on('disconnected', function () {
-      // PeerJS may try to reconnect
-      State.peer.reconnect();
+      if (State.peer && !State.peer.destroyed) {
+        State.peer.reconnect();
+      }
     });
 
   } catch (err) {
@@ -294,45 +480,96 @@ async function joinRoom() {
   }
   if (State.isConnecting) return;
 
+  getNickname();
+  destroyPeer();
+
   State.isConnecting = true;
   State.isHost = false;
   State.roomId = roomId;
+  State.retryCount = 0;
+  State.serverIndex = 0;
   setConnectionStatus('connecting');
 
-  try {
-    State.peer = new Peer(undefined, { debug: 0 });
+  tryJoin();
+}
 
-    var connectTimer = null;
+function tryJoin() {
+  var opts = createPeerOptions();
+
+  try {
+    State.peer = new Peer(opts);
+
+    var connectTimeoutId = null;
 
     State.peer.on('open', function (id) {
       State.peerId = id;
 
-      var hostId = peerIdFromRoom(roomId);
-      var conn = State.peer.connect(hostId, { reliable: true });
+      var hostId = peerIdFromRoom(State.roomId);
+      var conn = State.peer.connect(hostId, {
+        reliable: true,
+        serialization: 'json',
+      });
+
       State.conn = conn;
       setupConnection(conn);
+
+      // Set connection timeout
+      connectTimeoutId = setTimeout(function () {
+        if (!State.isConnected && State.isConnecting) {
+          State.isConnecting = false;
+          if (State.conn) { State.conn.close(); State.conn = null; }
+          setConnectionStatus('offline');
+
+          State.retryCount++;
+          if (State.retryCount < CONFIG.maxRetries) {
+            showToast('连接超时，正在重试 (' + (State.retryCount + 1) + '/' + CONFIG.maxRetries + ')...');
+            destroyPeer();
+            setTimeout(function () { tryJoin(); }, 1000);
+          } else {
+            showToast('连接失败，请确认房间号正确且房主在线', 'error');
+          }
+        }
+      }, CONFIG.connectTimeout);
     });
 
     State.peer.on('error', function (err) {
+      if (connectTimeoutId) clearTimeout(connectTimeoutId);
+
+      if (err.type === 'peer-unavailable') {
+        State.retryCount++;
+        if (State.retryCount < CONFIG.maxRetries) {
+          showToast('房间暂未响应，正在重试 (' + (State.retryCount + 1) + '/' + CONFIG.maxRetries + ')...');
+          if (State.peer) { State.peer.destroy(); State.peer = null; }
+          setTimeout(function () { tryJoin(); }, 1500);
+          return;
+        }
+        State.isConnecting = false;
+        setConnectionStatus('offline');
+        showToast('找不到该房间，请检查房间号是否正确', 'error');
+        return;
+      }
+
+      if (err.type === 'network' || err.type === 'server-error' || err.type === 'socket-error') {
+        State.serverIndex++;
+        if (State.peer) { State.peer.destroy(); State.peer = null; }
+        if (State.serverIndex < CONFIG.signalServers.length) {
+          showToast('切换信令服务器重试...');
+          setTimeout(function () { tryJoin(); }, 500);
+          return;
+        }
+      }
+
       State.isConnecting = false;
       setConnectionStatus('offline');
-      if (err.type === 'peer-unavailable') {
-        showToast('找不到该房间，请检查房间号', 'error');
-      } else {
-        showToast('连接失败，请检查网络', 'error');
-      }
+      showToast('连接失败，请检查网络后重试', 'error');
       console.error(err);
     });
 
-    // Timeout
-    setTimeout(function () {
-      if (!State.isConnected && State.isConnecting) {
-        State.isConnecting = false;
-        if (State.conn) { State.conn.close(); State.conn = null; }
-        setConnectionStatus('offline');
-        showToast('连接超时，请检查房间号是否正确', 'error');
+    State.peer.on('disconnected', function () {
+      if (State.peer && !State.peer.destroyed) {
+        State.peer.reconnect();
       }
-    }, 20000);
+    });
 
   } catch (err) {
     State.isConnecting = false;
@@ -344,6 +581,13 @@ async function joinRoom() {
 
 function updateRoomUI() {
   dom.displayRoomId.textContent = State.roomId || '---';
+  dom.myNameDisplay.textContent = State.nickname || '我';
+
+  // Update role text
+  var roleSpan = dom.memberList.querySelector('.member-role');
+  if (roleSpan) {
+    roleSpan.textContent = State.isHost ? '（房主）' : '（成员）';
+  }
 }
 
 function copyRoomId() {
@@ -418,7 +662,11 @@ function handleFileUpload(file) {
     return;
   }
 
-  // Show loading state
+  // Check file size - warn if > 200MB
+  if (file.size > 200 * 1024 * 1024) {
+    showToast('文件较大（>' + Math.round(file.size / 1024 / 1024) + 'MB），加载可能需要一些时间');
+  }
+
   showToast('正在加载视频...');
 
   var url = URL.createObjectURL(file);
@@ -441,8 +689,6 @@ function handleUrlLoad() {
     return;
   }
 
-  // For CORS-restricted external URLs, the video tag may fail.
-  // We attempt direct loading; the browser will handle CORS.
   loadVideo('url', url);
   showToast('视频已加载');
 }
@@ -486,12 +732,12 @@ function setupVideoEvents() {
     }
   });
 
-  // Periodic sync to correct drift (every 4 seconds when playing)
+  // Periodic sync to correct drift
   setInterval(function () {
     if (State.isHost && State.isConnected && State.videoUrl && !video.paused) {
       sendMessage('play', { currentTime: video.currentTime });
     }
-  }, 4000);
+  }, CONFIG.syncInterval);
 }
 
 // ============================================
@@ -505,13 +751,15 @@ function addChatMessage(sender, text) {
   if (sender === 'system') {
     msgDiv.innerHTML = '<span class="msg-text">' + escapeHtml(text) + '</span>';
   } else if (sender === 'peer') {
+    var peerName = State.peerNickname || '好友';
     msgDiv.innerHTML =
-      '<div class="msg-sender">好友</div>' +
+      '<div class="msg-sender">' + escapeHtml(peerName) + '</div>' +
       '<div class="msg-text">' + escapeHtml(text) + '</div>' +
       '<div class="msg-time">' + now + '</div>';
   } else {
+    var myName = State.nickname || '我';
     msgDiv.innerHTML =
-      '<div class="msg-sender">我</div>' +
+      '<div class="msg-sender">' + escapeHtml(myName) + '</div>' +
       '<div class="msg-text">' + escapeHtml(text) + '</div>' +
       '<div class="msg-time">' + now + '</div>';
   }
@@ -521,12 +769,6 @@ function addChatMessage(sender, text) {
 
   dom.chatMessages.appendChild(msgDiv);
   dom.chatMessages.scrollTop = dom.chatMessages.scrollHeight;
-}
-
-function escapeHtml(text) {
-  var div = document.createElement('div');
-  div.textContent = text;
-  return div.innerHTML;
 }
 
 function sendChat() {
@@ -609,6 +851,8 @@ function bindEvents() {
 function init() {
   bindEvents();
   setConnectionStatus('offline');
+  // Pre-fill a random nickname
+  dom.nicknameInput.value = generateNickname();
 }
 
 document.addEventListener('DOMContentLoaded', init);
