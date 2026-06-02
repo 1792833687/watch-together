@@ -1,0 +1,173 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Watch Together - 双人同步观影</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@400;500;600;700&family=Noto+Sans+SC:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <!-- Connection Status Bar -->
+  <div id="status-bar">
+    <div class="status-indicator" id="connection-status">
+      <span class="status-dot offline"></span>
+      <span id="status-text">未连接</span>
+    </div>
+    <div class="status-info" id="room-info"></div>
+  </div>
+
+  <!-- Lobby Screen -->
+  <div id="lobby" class="screen active">
+    <div class="lobby-container">
+      <div class="lobby-header">
+        <div class="logo-icon">
+          <svg width="48" height="48" viewBox="0 0 48 48" fill="none">
+            <rect width="48" height="48" rx="14" fill="currentColor" opacity="0.1"/>
+            <path d="M16 14h16a4 4 0 014 4v12a4 4 0 01-4 4H16a4 4 0 01-4-4V18a4 4 0 014-4z" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/>
+            <path d="M20 18l8 6-8 6V18z" fill="currentColor"/>
+          </svg>
+        </div>
+        <h1>一起看</h1>
+        <p class="subtitle">创建房间，邀请朋友同步观看视频</p>
+      </div>
+
+      <div class="lobby-actions">
+        <div class="action-card" id="create-room-btn">
+          <div class="action-icon">
+            <svg width="32" height="32" viewBox="0 0 32 32" fill="none">
+              <circle cx="16" cy="16" r="12" stroke="currentColor" stroke-width="2.5"/>
+              <path d="M16 10v12M10 16h12" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"/>
+            </svg>
+          </div>
+          <h3>创建房间</h3>
+          <p>生成房间号，邀请好友加入</p>
+        </div>
+
+        <div class="divider">
+          <span>或</span>
+        </div>
+
+        <div class="join-section">
+          <div class="input-group">
+            <input type="text" id="room-id-input" placeholder="输入房间号加入" maxlength="20" autocomplete="off">
+            <button id="join-room-btn" class="btn-primary">加入房间</button>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Watch Room Screen -->
+  <div id="watch-room" class="screen">
+    <div class="watch-layout">
+      <!-- Main Video Area -->
+      <div class="video-main">
+        <div class="video-container" id="video-container">
+          <div class="video-placeholder" id="video-placeholder">
+            <svg width="80" height="80" viewBox="0 0 80 80" fill="none">
+              <circle cx="40" cy="40" r="38" stroke="currentColor" stroke-width="2" opacity="0.3"/>
+              <path d="M33 28l18 12-18 12V28z" fill="currentColor" opacity="0.3"/>
+            </svg>
+            <p>上传视频或粘贴链接开始观看</p>
+          </div>
+          <video id="main-video" controls crossorigin="anonymous"></video>
+        </div>
+
+        <!-- Video Controls Overlay -->
+        <div class="sync-controls" id="sync-controls">
+          <div class="control-info">
+            <span class="sync-badge" id="sync-badge">
+              <span class="sync-dot"></span> 同步中
+            </span>
+            <span class="viewer-count">
+              <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
+                <circle cx="6" cy="5" r="2.5" stroke="currentColor" stroke-width="1.5"/>
+                <circle cx="11" cy="5" r="2.5" stroke="currentColor" stroke-width="1.5"/>
+                <path d="M1 14c0-2.8 2.2-5 5-5 2.8 0 5 2.2 5 5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+                <path d="M11 14c0-2.8 2.2-5 4-5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+              </svg>
+              <span id="viewer-count-text">2人</span>
+            </span>
+          </div>
+        </div>
+
+        <!-- Video Source Panel -->
+        <div class="source-panel" id="source-panel">
+          <div class="source-tabs">
+            <button class="source-tab active" data-tab="upload">上传视频</button>
+            <button class="source-tab" data-tab="url">视频链接</button>
+          </div>
+          <div class="source-content">
+            <div class="source-pane active" id="pane-upload">
+              <label class="upload-area" id="upload-area">
+                <input type="file" id="file-input" accept="video/*" hidden>
+                <svg width="40" height="40" viewBox="0 0 40 40" fill="none">
+                  <path d="M20 8v24M8 20h24" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"/>
+                  <rect x="4" y="4" width="32" height="32" rx="8" stroke="currentColor" stroke-width="2"/>
+                </svg>
+                <span>点击或拖拽上传视频文件</span>
+                <span class="upload-hint">支持 MP4, WebM, MOV 等格式</span>
+              </label>
+            </div>
+            <div class="source-pane" id="pane-url">
+              <div class="url-input-group">
+                <input type="text" id="url-input" placeholder="粘贴视频链接 (MP4/M3U8/YouTube/B站等)">
+                <button id="url-load-btn" class="btn-primary">加载视频</button>
+              </div>
+              <p class="url-hint">支持直链MP4、HLS/M3U8流、以及常见视频平台链接</p>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Sidebar -->
+      <div class="sidebar">
+        <!-- Room Info -->
+        <div class="sidebar-section room-section">
+          <h3 class="section-title">房间信息</h3>
+          <div class="room-detail">
+            <div class="room-id-display">
+              <span class="label">房间号</span>
+              <span class="value" id="display-room-id">---</span>
+            </div>
+            <button id="copy-room-id" class="btn-secondary btn-sm" title="复制房间号">
+              <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
+                <rect x="4" y="4" width="8" height="8" rx="1.5" stroke="currentColor" stroke-width="1.2"/>
+                <path d="M2 10V2.5A.5.5 0 012.5 2H10" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/>
+              </svg>
+              复制
+            </button>
+          </div>
+        </div>
+
+        <!-- Chat -->
+        <div class="sidebar-section chat-section">
+          <h3 class="section-title">消息</h3>
+          <div class="chat-messages" id="chat-messages">
+            <div class="chat-empty">
+              <p>暂无消息</p>
+              <span>发送消息和朋友交流</span>
+            </div>
+          </div>
+          <div class="chat-input-area">
+            <input type="text" id="chat-input" placeholder="发送消息..." maxlength="500" autocomplete="off">
+            <button id="chat-send-btn" class="btn-send" title="发送">
+              <svg width="18" height="18" viewBox="0 0 18 18" fill="none">
+                <path d="M2 9l14-7-7 14-2-5-5-2z" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+              </svg>
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Toast notifications -->
+  <div class="toast-container" id="toast-container"></div>
+
+  <script src="https://unpkg.com/peerjs@1.5.2/dist/peerjs.min.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>
