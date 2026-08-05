@@ -1,189 +1,213 @@
 <!DOCTYPE html>
-<html lang="zh-CN">
+<html lang="zh-CN" data-theme="dark">
 <head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Watch Together - 双人同步观影</title>
-  <link rel="preconnect" href="https://fonts.googleapis.com">
-  <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@400;500;600;700&family=Noto+Sans+SC:wght@400;500;600;700&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="styles.css">
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,viewport-fit=cover">
+<title>小雨滴滴答</title>
+<link rel="stylesheet" href="styles.css?v=42">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@700&family=Josefin+Sans:wght@400;500;600&display=swap" rel="stylesheet">
 </head>
 <body>
-  <!-- Connection Status Bar -->
-  <div id="status-bar">
-    <div class="status-indicator" id="connection-status">
-      <span class="status-dot offline"></span>
-      <span id="status-text">未连接</span>
+
+<!-- ====== LOBBY ====== -->
+<div class="screen active" id="lobby" aria-label="大厅">
+  <div class="lobby-card">
+    <div class="lobby-icon"><svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><polygon points="23 7 16 12 23 17 23 7"/><rect x="1" y="5" width="15" height="14" rx="2" ry="2"/></svg></div>
+    <h1 class="lobby-title">小雨滴滴答</h1>
+    <p class="lobby-sub">和朋友同步看视频 · 创建房间分享链接即可加入</p>
+    <div class="nick-row">
+      <input type="text" id="nick-input" class="input" placeholder="你的昵称" maxlength="12" autocomplete="off" aria-label="昵称">
+      <button id="nick-save" class="btn btn-secondary btn-sm">保存</button>
     </div>
-    <div class="status-info" id="room-info"></div>
-  </div>
-
-  <!-- Lobby Screen -->
-  <div id="lobby" class="screen active">
-    <div class="lobby-container">
-      <div class="lobby-header">
-        <div class="logo-icon">
-          <svg width="48" height="48" viewBox="0 0 48 48" fill="none">
-            <rect width="48" height="48" rx="14" fill="currentColor" opacity="0.1"/>
-            <path d="M16 14h16a4 4 0 014 4v12a4 4 0 01-4 4H16a4 4 0 01-4-4V18a4 4 0 014-4z" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/>
-            <path d="M20 18l8 6-8 6V18z" fill="currentColor"/>
-          </svg>
-        </div>
-        <h1>一起看</h1>
-        <p class="subtitle">创建房间，邀请朋友同步观看视频</p>
-      </div>
-
-      <div class="lobby-actions">
-        <div class="nickname-section">
-          <label for="nickname-input" class="nickname-label">你的昵称</label>
-          <input type="text" id="nickname-input" placeholder="给自己取个名字吧" maxlength="12" autocomplete="off">
-        </div>
-
-        <div class="action-card" id="create-room-btn">
-          <div class="action-icon">
-            <svg width="32" height="32" viewBox="0 0 32 32" fill="none">
-              <circle cx="16" cy="16" r="12" stroke="currentColor" stroke-width="2.5"/>
-              <path d="M16 10v12M10 16h12" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"/>
-            </svg>
-          </div>
-          <h3>创建房间</h3>
-          <p>生成房间号，邀请好友加入</p>
-        </div>
-
-        <div class="divider">
-          <span>或</span>
-        </div>
-
-        <div class="join-section">
-          <div class="input-group">
-            <input type="text" id="room-id-input" placeholder="输入房间号加入" maxlength="20" autocomplete="off">
-            <button id="join-room-btn" class="btn-primary">加入房间</button>
-          </div>
-        </div>
+    <button id="create-btn" class="btn btn-primary" style="width:100%;justify-content:center">创建房间</button>
+    <div class="join-row">
+      <span class="divider">或加入已有房间</span>
+      <div class="input-group">
+        <input type="text" id="join-input" class="input" placeholder="输入4位房间号" autocomplete="off" aria-label="房间号">
+        <button id="join-btn" class="btn btn-primary btn-sm">加入</button>
       </div>
     </div>
+    <p id="lobby-err" class="lobby-err"></p>
+    <p class="lobby-footer">v42 · Cinema Architecture</p>
   </div>
+</div>
 
-  <!-- Watch Room Screen -->
-  <div id="watch-room" class="screen">
-    <div class="watch-layout">
-      <!-- Main Video Area -->
-      <div class="video-main">
-        <div class="video-container" id="video-container">
-          <div class="video-placeholder" id="video-placeholder">
-            <svg width="80" height="80" viewBox="0 0 80 80" fill="none">
-              <circle cx="40" cy="40" r="38" stroke="currentColor" stroke-width="2" opacity="0.3"/>
-              <path d="M33 28l18 12-18 12V28z" fill="currentColor" opacity="0.3"/>
-            </svg>
-            <p>上传视频或粘贴链接开始观看</p>
-          </div>
-          <video id="main-video" controls crossorigin="anonymous"></video>
-        </div>
+<!-- ====== WATCH ROOM ====== -->
+<div class="screen" id="watch" aria-label="观影室">
 
-        <!-- Video Controls Overlay -->
-        <div class="sync-controls" id="sync-controls">
-          <div class="control-info">
-            <span class="sync-badge" id="sync-badge">
-              <span class="sync-dot"></span> 同步中
-            </span>
-            <span class="viewer-count">
-              <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
-                <circle cx="6" cy="5" r="2.5" stroke="currentColor" stroke-width="1.5"/>
-                <circle cx="11" cy="5" r="2.5" stroke="currentColor" stroke-width="1.5"/>
-                <path d="M1 14c0-2.8 2.2-5 5-5 2.8 0 5 2.2 5 5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
-                <path d="M11 14c0-2.8 2.2-5 4-5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
-              </svg>
-              <span id="viewer-count-text">2人</span>
-            </span>
-          </div>
-        </div>
-
-        <!-- Video Source Panel -->
-        <div class="source-panel" id="source-panel">
-          <div class="source-tabs">
-            <button class="source-tab active" data-tab="upload">上传视频</button>
-            <button class="source-tab" data-tab="url">视频链接</button>
-          </div>
-          <div class="source-content">
-            <div class="source-pane active" id="pane-upload">
-              <label class="upload-area" id="upload-area">
-                <input type="file" id="file-input" accept="video/*" hidden>
-                <svg width="40" height="40" viewBox="0 0 40 40" fill="none">
-                  <path d="M20 8v24M8 20h24" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"/>
-                  <rect x="4" y="4" width="32" height="32" rx="8" stroke="currentColor" stroke-width="2"/>
-                </svg>
-                <span>点击或拖拽上传视频文件</span>
-                <span class="upload-hint">支持 MP4, WebM, MOV 等格式</span>
-              </label>
-            </div>
-            <div class="source-pane" id="pane-url">
-              <div class="url-input-group">
-                <input type="text" id="url-input" placeholder="粘贴视频链接 (MP4/M3U8/YouTube/B站等)">
-                <button id="url-load-btn" class="btn-primary">加载视频</button>
-              </div>
-              <p class="url-hint">支持直链MP4、HLS/M3U8流、以及常见视频平台链接</p>
-            </div>
-          </div>
-        </div>
-      </div>
-
-      <!-- Sidebar -->
-      <div class="sidebar">
-        <!-- Room Info -->
-        <div class="sidebar-section room-section">
-          <h3 class="section-title">房间信息</h3>
-          <div class="room-detail">
-            <div class="room-id-display">
-              <span class="label">房间号</span>
-              <span class="value" id="display-room-id">---</span>
-            </div>
-            <button id="copy-room-id" class="btn-secondary btn-sm" title="复制房间号">
-              <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
-                <rect x="4" y="4" width="8" height="8" rx="1.5" stroke="currentColor" stroke-width="1.2"/>
-                <path d="M2 10V2.5A.5.5 0 012.5 2H10" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/>
-              </svg>
-              复制
-            </button>
-          </div>
-          <div class="member-list" id="member-list">
-            <div class="member-item">
-              <span class="member-dot me"></span>
-              <span class="member-name" id="my-name-display">我</span>
-              <span class="member-role">（房主）</span>
-            </div>
-            <div class="member-item" id="peer-member" style="display:none">
-              <span class="member-dot peer"></span>
-              <span class="member-name" id="peer-name-display">好友</span>
-            </div>
-          </div>
-        </div>
-
-        <!-- Chat -->
-        <div class="sidebar-section chat-section">
-          <h3 class="section-title">消息</h3>
-          <div class="chat-messages" id="chat-messages">
-            <div class="chat-empty">
-              <p>暂无消息</p>
-              <span>发送消息和朋友交流</span>
-            </div>
-          </div>
-          <div class="chat-input-area">
-            <input type="text" id="chat-input" placeholder="发送消息..." maxlength="500" autocomplete="off">
-            <button id="chat-send-btn" class="btn-send" title="发送">
-              <svg width="18" height="18" viewBox="0 0 18 18" fill="none">
-                <path d="M2 9l14-7-7 14-2-5-5-2z" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
-              </svg>
-            </button>
-          </div>
-        </div>
-      </div>
+  <!-- Top Bar -->
+  <div class="topbar">
+    <div class="topbar-left">
+      <span class="conn-dot idle" id="conn-dot" title="连接状态"></span>
+      <span class="badge" id="room-badge">---</span>
+      <span class="status" id="status">就绪</span>
+      <button class="btn btn-sm btn-secondary hidden" id="retry-conn" title="重新连接">重试</button>
+    </div>
+    <div class="topbar-center">
+      <span class="peer-presence hidden" id="peer-presence">
+        <span class="peer-dot online" id="peer-dot"></span>
+        <span id="peer-name">--</span>
+        <span class="peer-video" id="peer-video"></span>
+      </span>
+      <span class="online-count" id="online-count">👤 1 人在线</span>
+    </div>
+    <div class="topbar-right">
+      <button class="theme-toggle" id="theme-toggle" title="切换主题" aria-label="切换明暗主题">
+        <svg class="icon-sun" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="5"/><line x1="12" y1="1" x2="12" y2="3"/><line x1="12" y1="21" x2="12" y2="23"/><line x1="4.22" y1="4.22" x2="5.64" y2="5.64"/><line x1="18.36" y1="18.36" x2="19.78" y2="19.78"/><line x1="1" y1="12" x2="3" y2="12"/><line x1="21" y1="12" x2="23" y2="12"/><line x1="4.22" y1="19.78" x2="5.64" y2="18.36"/><line x1="18.36" y1="5.64" x2="19.78" y2="4.22"/></svg>
+        <svg class="icon-moon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>
+      </button>
+      <button class="btn btn-sm btn-secondary" id="change-room-btn">换房</button>
+      <button class="btn btn-sm btn-secondary" id="panel-toggle-btn" title="折叠面板">◀</button>
+      <button class="btn btn-sm btn-danger" id="leave-btn">离开</button>
     </div>
   </div>
 
-  <!-- Toast notifications -->
-  <div class="toast-container" id="toast-container"></div>
+  <!-- Body: Video + Panel -->
+  <div class="body">
 
-  <script src="https://unpkg.com/peerjs@1.5.2/dist/peerjs.min.js"></script>
-  <script src="app.js"></script>
+    <!-- Video Stage -->
+    <div class="video-stage" id="video-stage" aria-label="视频播放区">
+
+      <!-- Placeholder -->
+      <div class="welcome" id="placeholder">
+        <svg width="64" height="64" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="0.8"><polygon points="23 7 16 12 23 17 23 7"/><rect x="1" y="5" width="15" height="14" rx="2" ry="2"/></svg>
+        <p class="welcome-title">准备就绪</p>
+        <p class="welcome-hint">粘贴链接或搜索片源开始观看</p>
+        <div class="welcome-share">
+          <p>分享房间链接给朋友</p>
+          <button class="btn btn-primary btn-sm" id="copy-link-btn">📋 复制链接</button>
+        </div>
+      </div>
+
+      <!-- Loading -->
+      <div class="load-overlay hidden" id="load-overlay">
+        <div class="load-spinner"></div>
+        <span class="load-txt" id="load-txt">加载中...</span>
+      </div>
+
+      <!-- Video Error -->
+      <div class="video-err-overlay hidden" id="video-err-overlay">
+        <p class="video-err-txt" id="video-err-txt"></p>
+        <div class="video-err-actions" id="video-err-actions"></div>
+      </div>
+
+      <!-- Player -->
+      <video id="player" playsinline webkit-playsinline x5-video-player-type="h5" x5-video-orientation="portraint"></video>
+      <canvas id="shared-screen"></canvas>
+
+      <!-- Video Controls -->
+      <div class="vid-controls hidden" id="vid-controls">
+        <div class="vid-seek-wrap">
+          <span class="vid-time" id="vid-cur">0:00</span>
+          <input type="range" class="vid-seek" id="vid-seek" min="0" max="100" value="0" step="0.1" aria-label="播放进度">
+          <span class="vid-time" id="vid-dur">0:00</span>
+          <button class="sync-btn" id="sync-btn" title="手动同步进度" aria-label="手动同步">⟳</button>
+        </div>
+        <button class="vid-ctrl-btn" id="pip-btn" title="画中画" aria-label="画中画">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="12" y="8" width="10" height="8" rx="1"/><rect x="2" y="4" width="16" height="14" rx="2"/></svg>
+        </button>
+        <button class="vid-ctrl-btn" id="clear-btn" title="停止" aria-label="停止播放">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="6" y="6" width="12" height="12"/></svg>
+        </button>
+        <button class="vid-ctrl-btn" id="playpause-btn" title="暂停/播放" aria-label="暂停或播放">
+          <svg class="pp-play" width="16" height="16" viewBox="0 0 24 24" fill="currentColor" stroke="none"><polygon points="5 3 19 12 5 21 5 3"/></svg>
+          <svg class="pp-pause" width="16" height="16" viewBox="0 0 24 24" fill="currentColor" stroke="none" style="display:none"><rect x="6" y="4" width="4" height="16"/><rect x="14" y="4" width="4" height="16"/></svg>
+        </button>
+        <div class="vid-ctrl-spacer"></div>
+        <div class="vol-group">
+          <span class="vol-icon">🔊</span>
+          <input type="range" class="vol-slider" id="vol-slider" min="0" max="1" value="1" step="0.05" aria-label="音量">
+        </div>
+        <div class="speed-group">
+          <span class="speed-opt" data-speed="0.75">0.75x</span>
+          <span class="speed-opt active" data-speed="1">1x</span>
+          <span class="speed-opt" data-speed="1.25">1.25x</span>
+          <span class="speed-opt" data-speed="1.5">1.5x</span>
+          <span class="speed-opt" data-speed="2">2x</span>
+        </div>
+        <button class="vid-ctrl-btn" id="fullscreen-btn" title="全屏" aria-label="切换全屏">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="15 3 21 3 21 9"/><polyline points="9 21 3 21 3 15"/><line x1="21" y1="3" x2="14" y2="10"/><line x1="3" y1="21" x2="10" y2="14"/></svg>
+        </button>
+      </div>
+    </div>
+
+    <!-- Desktop Panel (also used as mobile bottom panel) -->
+    <aside class="panel-desktop" id="panel-desk" aria-label="控制面板">
+
+      <!-- Mobile Tab Switcher (only visible ≤768px) -->
+      <div class="mobile-panel-tabs" id="mobile-panel-tabs">
+        <button class="mpt-tab active" data-mpt="search">🔍 搜索</button>
+        <button class="mpt-tab" data-mpt="chat">💬 聊天</button>
+        <button class="mpt-tab" data-mpt="list">📋 列表</button>
+        <button class="mpt-tab" data-mpt="members">👥</button>
+        <button class="mobile-sync-btn" id="mobile-sync-btn" title="手动同步">⟳ 同步</button>
+      </div>
+
+      <section class="pnl-sec mpt-section mpt-search" id="pnl-search">
+        <h3 class="pnl-sec-title">搜索片源</h3>
+        <div class="search-row">
+          <input type="text" id="url-input" class="input" placeholder="影片名 或 视频链接" aria-label="搜索">
+          <button class="btn btn-primary btn-sm" id="url-btn">搜索</button>
+        </div>
+        <div class="search-history hidden" id="search-history"></div>
+        <div class="sk-list hidden" id="search-sk">
+          <div class="sk-item"></div><div class="sk-item"></div><div class="sk-item"></div>
+        </div>
+        <div class="search-results hidden" id="search-res"></div>
+        <div class="empty-state hidden" id="search-empty"><p>未找到片源<br>试试其他关键词</p></div>
+        <div class="ep-list hidden" id="ep-list"></div>
+      </section>
+
+      <section class="pnl-sec mpt-section mpt-list" id="pnl-playlist">
+        <div class="pnl-sec-head">
+          <h3 class="pnl-sec-title">播放列表</h3>
+          <button class="btn btn-sm btn-secondary" id="playlist-clear">清空</button>
+        </div>
+        <div id="playlist"></div>
+        <div class="empty-state" id="playlist-empty"><p>播放过的视频<br>会出现在这里</p></div>
+      </section>
+
+      <section class="pnl-sec mpt-section mpt-members" id="pnl-members">
+        <h3 class="pnl-sec-title">在线成员</h3>
+        <div id="member-list"></div>
+      </section>
+
+      <section class="pnl-sec pnl-sec-chat mpt-section mpt-chat" id="pnl-chat">
+        <h3 class="pnl-sec-title">聊天</h3>
+        <div class="msg-list" id="msg-list"></div>
+        <div class="empty-state" id="chat-empty"><p>发送第一条消息~</p></div>
+        <div class="emoji-picker" id="emoji-picker"></div>
+        <div class="chat-row">
+          <button class="btn btn-sm btn-secondary" id="emoji-btn">😊</button>
+          <input type="text" id="chat-input" class="input" placeholder="输入消息..." aria-label="消息">
+          <button class="btn btn-primary btn-sm" id="chat-btn">发送</button>
+        </div>
+      </section>
+    </aside>
+
+  </div>
+
+</div>
+
+<!-- Room Switch Overlay -->
+<div class="room-switch-overlay hidden" id="room-switch-overlay">
+  <div class="room-switch-card">
+    <h3>切换房间</h3>
+    <input type="text" id="change-room-input" class="input" placeholder="输入新房间号" aria-label="新房间号">
+    <div class="room-switch-actions">
+      <button class="btn btn-sm btn-secondary" id="change-room-cancel">取消</button>
+      <button class="btn btn-sm btn-primary" id="change-room-go">进入</button>
+    </div>
+  </div>
+</div>
+
+<!-- Toast Container -->
+<div id="toast-container"></div>
+
+<!-- Scripts -->
+<script src="lib/mqtt.min.js"></script>
+<script src="lib/hls.min.js"></script>
+<script src="app.js?v=42"></script>
 </body>
 </html>
