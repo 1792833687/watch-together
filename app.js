@@ -1,5 +1,5 @@
 /* ============================================================
-   一起看 v42 — Cinema Architecture (sync & security fixes)
+   一起看 v43 — Cinema Architecture (sync & security fixes)
    IIFE · 模块化 · 移动优先 · MQTT 同步
    ============================================================ */
 (function() {
@@ -128,6 +128,7 @@ const S = {
   _seekAckTimer: null,  // seek-ack 超时计时器
   _skipSeekSync: false, // 本地键盘快进/快退时跳过 seek 同步
   _blobUrls: [],        // SSL 重试生成的 blob URL（cleanup 时统一回收）
+  lastPeerSeen: 0,      // 最近一次收到对方消息的时间（离线心跳检测）
 };
 
 // ============================================================
@@ -295,6 +296,8 @@ const MQTT = {
 const MsgHandler = {
   handle(topic, data) {
     if (!data || !data.t) return;
+    // 心跳：收到对方任何带昵称的消息即认为对方在线（用于对方直接关页不触发 leave 的离线检测）
+    if (data.name && data.name !== S.nickname) S.lastPeerSeen = Date.now();
     switch (data.t) {
       case 'join': this._onJoin(data); break;
       case 'leave': this._onLeave(data); break;
@@ -308,6 +311,8 @@ const MsgHandler = {
       case 'speed': this._onSpeed(data); break;
       case 'sync-req': this._onSyncReq(); break;
       case 'sync-ack': this._onSyncAck(data); break;
+      case 'ping': this._onPing(data); break;
+      case 'pong': this._onPong(data); break;
     }
   },
 
@@ -332,6 +337,19 @@ const MsgHandler = {
     if (pp) pp.classList.remove('hidden');
     if (pn) pn.textContent = S.peerName;
     Member.render();
+    this._updateOnlineStatus();
+  },
+
+  // 心跳协议：对方 ping → 回 pong；收到任何对方消息都会刷新 lastPeerSeen
+  _onPing(data) {
+    S.peerOnline = true;
+    if (data.name && data.name !== S.nickname) {
+      MQTT.publish({ t: 'pong', name: S.nickname });
+    }
+    this._updateOnlineStatus();
+  },
+  _onPong() {
+    S.peerOnline = true;
     this._updateOnlineStatus();
   },
 
@@ -360,8 +378,8 @@ const MsgHandler = {
     S.peerOnline = true;
     S.peerPlaying = true;
     // B站 iframe 模式：走 postMessage 统一接口
-    if (Player._mode === 'bili') {
-      const cur = Player._biliTime;
+    if (Player._mode !== 'video') {
+      const cur = Player.getCurrentTime();
       if (Date.now() - S.lastSyncRx < 2000 && Math.abs(cur - (data.time || 0)) < 2) return;
       S.lastSyncRx = Date.now();
       S.isSyncing = true;
@@ -389,8 +407,8 @@ const MsgHandler = {
   _onPause(data) {
     S.peerOnline = true;
     S.peerPlaying = false;
-    if (Player._mode === 'bili') {
-      const cur = Player._biliTime;
+    if (Player._mode !== 'video') {
+      const cur = Player.getCurrentTime();
       if (Date.now() - S.lastSyncRx < 2000 && Math.abs(cur - (data.time || 0)) < 2) return;
       S.lastSyncRx = Date.now();
       S.isSyncing = true;
@@ -418,9 +436,9 @@ const MsgHandler = {
     S.peerOnline = true;
     S.peerPlaying = data.peerPlaying !== false;
     // B站 iframe 模式：即时跟随跳转（iframe 内拖拽本身是即时的）
-    if (Player._mode === 'bili') {
+    if (Player._mode !== 'video') {
       const target = data.time || 0;
-      const cur = Player._biliTime;
+      const cur = Player.getCurrentTime();
       S.isSyncing = true;
       if (Math.abs(cur - target) <= 1) {
         if (S.peerPlaying) Player.play(); else Player.pause();
@@ -473,10 +491,10 @@ const MsgHandler = {
     if (!S.seekWaitAck) return;
     S.seekWaitAck = false;
     if (S._seekAckTimer) { clearTimeout(S._seekAckTimer); S._seekAckTimer = null; }
-    if (Player._mode === 'bili') {
-      if (data.time != null) Player._biliTime = data.time;
+    if (Player._mode !== 'video') {
+      if (data.time != null) Player.seek(data.time);
       Player.play();
-      MQTT.publish({ t: 'play', time: Player._biliTime, name: S.nickname });
+      MQTT.publish({ t: 'play', time: Player.getCurrentTime(), name: S.nickname });
       Toast.info('✅ 同步播放');
       return;
     }
@@ -515,6 +533,15 @@ const MsgHandler = {
         return;
       }
     }
+    // YouTube：走 iframe + postMessage（yt: 前缀不能交给 Player.load）
+    if (data.url.indexOf('yt:') === 0) {
+      const ytVid = data.url.match(/yt:([\w-]+)/);
+      S.videoUrl = data.url;
+      S.videoType = 'youtube';
+      if (ytVid) Player.embedYouTube(ytVid[1]);
+      S.videoTitle = data.videoTitle || S.videoTitle || 'YouTube';
+      return;
+    }
     S.videoUrl = data.url;
     S.videoType = data.type || 'direct';
     Player.load(data.url, true);
@@ -535,12 +562,32 @@ const MsgHandler = {
   },
 
   _onChat(data) {
-    S.unreadChat++;
+    // 聊天面板未激活时才累计未读并显示徽标
+    if (S.chatHidden) {
+      S.unreadChat++;
+      this._updateChatBadge();
+    }
     Log.chat(data.name||'朋友', data.text||'', false);
     // Floating emoji reaction for single-emoji messages
     if (data.text && /^[\u{1F300}-\u{1FAFF}😀-🙏🌀-🗿]$/u.test(data.text.trim())) {
       this._floatEmoji(data.text.trim());
     }
+  },
+
+  // 未读聊天徽标：移动端 chat tab + 桌面端聊天标题
+  _updateChatBadge() {
+    const n = S.unreadChat || 0;
+    const setBadge = (host) => {
+      if (!host) return;
+      let b = host.querySelector('.tab-badge');
+      if (n > 0) {
+        if (!b) { b = document.createElement('span'); b.className = 'tab-badge'; host.appendChild(b); }
+        b.textContent = n > 99 ? '99+' : n;
+      } else if (b) { b.remove(); }
+    };
+    $$('#mobile-panel-tabs .mpt-tab[data-mpt="chat"]').forEach(tab => setBadge(tab));
+    const title = $('#pnl-chat .pnl-sec-title');
+    if (title) setBadge(title);
   },
 
   _floatEmoji(emoji) {
@@ -586,8 +633,11 @@ const MsgHandler = {
           if (peerTitle) S.videoTitle = peerTitle;
         }
       } else if (data.videoUrl.indexOf('yt:') === 0) {
-        // YouTube 仅嵌入不同步：记录状态但不加载播放器
-        S.videoUrl = data.videoUrl; S.videoType = 'youtube';
+        // YouTube：iframe + postMessage 同步加载（yt: 前缀不能走 Player.load）
+        const ytVid = data.videoUrl.match(/yt:([\w-]+)/);
+        S.videoUrl = data.videoUrl;
+        S.videoType = 'youtube';
+        if (ytVid) Player.embedYouTube(ytVid[1]);
       } else {
         S.videoUrl = data.videoUrl; S.videoType = data.type || 'direct';
         Player.load(data.videoUrl, true);
@@ -603,8 +653,8 @@ const MsgHandler = {
     // 拖动进度条: 10s 保护；播放/暂停: 3s 保护
     const guard = (Date.now() - S.lastManualSeek < 10000) || (Date.now() - S.lastLocalAction < 3000);
     if (guard) return;
-    if (Player._mode === 'bili') {
-      const cur = Player._biliTime || 0;
+    if (Player._mode !== 'video') {
+      const cur = Player.getCurrentTime() || 0;
       const ahead = Math.max(cur, data.time);
       if (ahead - cur > 1.5) Player.seek(ahead);
       if (data.peerPlaying) Player.play(); else Player.pause();
@@ -625,11 +675,11 @@ const MsgHandler = {
   _sendState() {
     const v = el('player');
     let time = 0, playing = false, title = '';
-    if (Player._mode === 'bili') {
-      // B站 iframe：用 postMessage 回传的进度/播放态（video 元素是隐藏的，不能取 v.duration）
-      time = Player._biliTime || 0;
-      playing = !Player._biliPaused;
-      title = S.videoTitle || 'B站视频';
+    if (Player._mode !== 'video') {
+      // iframe（B站/YouTube）：用 postMessage 回传的进度/播放态（video 元素是隐藏的）
+      time = Player.getCurrentTime() || 0;
+      playing = !Player.isPaused();
+      title = S.videoTitle || (Player._mode === 'bili' ? 'B站视频' : 'YouTube');
     } else if (v && v.duration) {
       time = v.currentTime;
       playing = !v.paused;
@@ -760,12 +810,15 @@ const Player = {
   },
 
   cleanup() {
-    // B站 iframe：注销消息监听 + 清理定时器 + 移除 iframe
+    // iframe（B站/YouTube）：注销消息监听 + 清理定时器 + 移除 iframe
     window.removeEventListener('message', Player._onFrameMsg);
-    if (Player._biliTimer) { clearInterval(Player._biliTimer); Player._biliTimer = null; }
+    if (Player._frameTimer) { clearInterval(Player._frameTimer); Player._frameTimer = null; }
     if (Player._frame) { Player._frame.remove(); Player._frame = null; }
     Player._mode = 'video';
     Player._biliPaused = true;
+    Player._ytPaused = true;
+    Player._biliTime = 0;
+    Player._ytTime = 0;
     if (S.hlsInstance) { try { S.hlsInstance.destroy(); } catch(e) {} S.hlsInstance = null; }
     // 清理 SSL 重试产生的 blob URL
     if (S._blobUrls) { S._blobUrls.forEach(u => { try { URL.revokeObjectURL(u); } catch(e) {} }); S._blobUrls = []; }
@@ -774,7 +827,7 @@ const Player = {
     v.removeAttribute('src');
     v.style.display = 'block';
     this._hideLoad();
-    const vc = el('vid-controls'); if (vc) { vc.classList.add('hidden'); vc.classList.remove('bili-mode'); }
+    const vc = el('vid-controls'); if (vc) { vc.classList.add('hidden'); vc.classList.remove('bili-mode'); vc.classList.remove('yt-mode'); }
     $$('.embed-frame').forEach(f => f.remove());
   },
 
@@ -815,6 +868,8 @@ const Player = {
     Player._frameReady = false;
     Player._biliPaused = true;
     Player._biliTime = 0;
+    Player._ytPaused = true;
+    Player._ytTime = 0;
     const v = el('player'), pl = el('placeholder');
     if (v) v.style.display = 'none';
     if (pl) pl.style.display = 'none';
@@ -839,58 +894,131 @@ const Player = {
     if (vc) { vc.classList.remove('hidden'); vc.classList.add('bili-mode'); }
     this._hideLoad();
     // 周期请求时间回传（兜底：部分情况下 B站不主动推送进度）
-    Player._biliTimer = setInterval(() => {
+    Player._frameTimer = setInterval(() => {
       if (Player._mode === 'bili') Player._framePost({ command: 'getCurrentTime' });
     }, 3000);
   },
 
-  // ---- 统一播放控制（video / bili 共用，MsgHandler 调用）----
+  // ====== YouTube iframe (postMessage 同步，enablejsapi) ======
+  embedYouTube(vid) {
+    this.cleanup();
+    Player._mode = 'yt';
+    Player._frameReady = false;
+    Player._ytPaused = true;
+    Player._ytTime = 0;
+    const v = el('player'), pl = el('placeholder');
+    if (v) v.style.display = 'none';
+    if (pl) pl.style.display = 'none';
+    const iframe = document.createElement('iframe');
+    iframe.className = 'embed-frame';
+    const origin = encodeURIComponent(window.location.origin || '');
+    iframe.src = 'https://www.youtube.com/embed/' + vid + '?enablejsapi=1&autoplay=0&rel=0&playsinline=1&origin=' + origin;
+    iframe.allow = 'autoplay; fullscreen; encrypted-media; picture-in-picture';
+    iframe.style.cssText = 'position:absolute;inset:0;width:100%;height:100%;border:none;z-index:5;background:#000';
+    iframe.addEventListener('load', () => {
+      Player._frameReady = true;
+      Player._framePost({ func: 'getCurrentTime' });
+    });
+    window.removeEventListener('message', Player._onFrameMsg);
+    window.addEventListener('message', Player._onFrameMsg);
+    el('video-stage').appendChild(iframe);
+    Player._frame = iframe;
+    S.videoUrl = 'yt:' + vid;
+    S.videoType = 'youtube';
+    const vc = el('vid-controls');
+    if (vc) { vc.classList.remove('hidden'); vc.classList.add('yt-mode'); }
+    this._hideLoad();
+    // 周期请求时间回传（兜底：部分情况下 YT 不主动推送进度）
+    Player._frameTimer = setInterval(() => {
+      if (Player._mode === 'yt') Player._framePost({ func: 'getCurrentTime' });
+    }, 3000);
+  },
+
+  // ---- 统一播放控制（video / iframe 共用，MsgHandler 调用）----
   play() {
     if (this._mode === 'bili' && this._frame) { this._framePost({ command: 'play' }); this._biliPaused = false; }
+    else if (this._mode === 'yt' && this._frame) { this._framePost({ func: 'playVideo' }); this._ytPaused = false; }
     else { const v = el('player'); if (v) v.play().catch(() => {}); }
   },
   pause() {
     if (this._mode === 'bili' && this._frame) { this._framePost({ command: 'pause' }); this._biliPaused = true; }
+    else if (this._mode === 'yt' && this._frame) { this._framePost({ func: 'pauseVideo' }); this._ytPaused = true; }
     else { const v = el('player'); if (v) v.pause(); }
   },
   seek(t) {
     if (this._mode === 'bili' && this._frame) { this._framePost({ command: 'seek', arg: Math.floor(t) }); this._biliTime = t; }
+    else if (this._mode === 'yt' && this._frame) { this._framePost({ func: 'seekTo', args: [t, true] }); this._ytTime = t; }
     else { const v = el('player'); if (v) v.currentTime = t; }
   },
   getCurrentTime() {
     if (this._mode === 'bili') return this._biliTime;
+    if (this._mode === 'yt') return this._ytTime;
     const v = el('player'); return v ? v.currentTime : 0;
+  },
+  isPaused() {
+    if (this._mode === 'bili') return this._biliPaused;
+    if (this._mode === 'yt') return this._ytPaused;
+    const v = el('player'); return v ? v.paused : true;
   },
   _framePost(msg) {
     if (this._frame && this._frame.contentWindow) {
-      try { this._frame.contentWindow.postMessage(JSON.stringify(msg), '*'); } catch (e) {}
+      try {
+        if (this._mode === 'yt') {
+          this._frame.contentWindow.postMessage(JSON.stringify({ event: 'command', func: msg.func, args: msg.args || [] }), '*');
+        } else {
+          this._frame.contentWindow.postMessage(JSON.stringify(msg), '*');
+        }
+      } catch (e) {}
     }
   },
-  // window message 监听：捕获 B站 iframe 回传的播放状态
+  // window message 监听：捕获 iframe（B站/YouTube）回传的播放状态
   _onFrameMsg(e) {
-    if (Player._mode !== 'bili') return;
-    // 只接受 B站播放器 iframe 的消息，忽略其它窗口（防伪造/串台）
-    if (e.origin && e.origin !== 'https://player.bilibili.com') return;
+    if (Player._mode === 'video') return;
     let d;
     try { d = typeof e.data === 'string' ? JSON.parse(e.data) : e.data; } catch (_) { return; }
-    if (!d || d.from !== 'bilibili') return;
-    if (d.title) S.videoTitle = d.title;
-    const t = d.currentTime != null ? d.currentTime
-      : (d.time != null ? d.time
-      : (d.data && d.data.currentTime != null ? d.data.currentTime : null));
-    if (t != null) Player._biliTime = t;
-    const cmd = d.command || d.event;
-    if (cmd === 'ready') {
+    if (!d) return;
+    if (Player._mode === 'bili') {
+      // 只接受 B站播放器 iframe 的消息，忽略其它窗口（防伪造/串台）
+      if (e.origin && e.origin !== 'https://player.bilibili.com') return;
+      if (d.from !== 'bilibili') return;
+      if (d.title) S.videoTitle = d.title;
+      const t = d.currentTime != null ? d.currentTime
+        : (d.time != null ? d.time
+        : (d.data && d.data.currentTime != null ? d.data.currentTime : null));
+      if (t != null) Player._biliTime = t;
+      const cmd = d.command || d.event;
+      if (cmd === 'ready') {
+        Player._frameReady = true;
+      } else if (cmd === 'play' || cmd === 'playing' || cmd === 'video_play') {
+        Player._biliPaused = false;
+        if (!S.isSyncing) Sync.send('play', { time: Player._biliTime, name: S.nickname });
+      } else if (cmd === 'pause' || cmd === 'video_pause') {
+        Player._biliPaused = true;
+        if (!S.isSyncing) Sync.send('pause', { time: Player._biliTime, name: S.nickname });
+      } else if (cmd === 'seek' || cmd === 'video_seek') {
+        // 对方在 iframe 内拖动进度条 → 我方即时跟随跳转
+        if (!S.isSyncing) Sync.send('seek', { time: Player._biliTime, name: S.nickname, peerPlaying: !Player._biliPaused });
+      }
+      return;
+    }
+    // YouTube：enablejsapi=1 时回传 onReady / onStateChange / infoDelivery
+    if (e.origin && e.origin !== 'https://www.youtube.com' && e.origin !== 'https://www.youtube-nocookie.com') return;
+    if (d.event === 'onReady') {
       Player._frameReady = true;
-    } else if (cmd === 'play' || cmd === 'playing' || cmd === 'video_play') {
-      Player._biliPaused = false;
-      if (!S.isSyncing) Sync.send('play', { time: Player._biliTime, name: S.nickname });
-    } else if (cmd === 'pause' || cmd === 'video_pause') {
-      Player._biliPaused = true;
-      if (!S.isSyncing) Sync.send('pause', { time: Player._biliTime, name: S.nickname });
-    } else if (cmd === 'seek' || cmd === 'video_seek') {
-      // 对方在 iframe 内拖动进度条 → 我方即时跟随跳转
-      if (!S.isSyncing) Sync.send('seek', { time: Player._biliTime, name: S.nickname, peerPlaying: !Player._biliPaused });
+      Player._framePost({ func: 'getCurrentTime' });
+    } else if (d.event === 'onStateChange' && d.info) {
+      const st = d.info.playerState;
+      if (st === 1) {
+        Player._ytPaused = false;
+        if (!S.isSyncing) Sync.send('play', { time: Player._ytTime, name: S.nickname });
+      } else if (st === 2) {
+        Player._ytPaused = true;
+        if (!S.isSyncing) Sync.send('pause', { time: Player._ytTime, name: S.nickname });
+      }
+    } else if (d.event === 'infoDelivery' && d.info) {
+      if (d.info.currentTime != null) Player._ytTime = d.info.currentTime;
+      if (d.info.playerState === 1) Player._ytPaused = false;
+      else if (d.info.playerState === 2) Player._ytPaused = true;
     }
   },
 
@@ -925,7 +1053,10 @@ const Search = {
     if (/^https?:\/\/.+\.(m3u8|mp4)(\?.*)?$/i.test(kw)) {
       return Search.loadPlayPage(kw, 'direct', null);
     }
-    // Bilibili（仅支持完整链接或裸 BV 号；b23.tv 短链请改用完整链接）
+    // Bilibili 短链 b23.tv：解析重定向后提取 BV 号
+    const b23 = kw.match(/b23\.tv\/([A-Za-z0-9]+)/);
+    if (b23) return this._resolveB23(b23[1]);
+    // Bilibili（完整链接或裸 BV 号）
     const bv = kw.match(/bilibili\.com\/video\/(BV[A-Za-z0-9]+)/) || kw.match(/\b(BV[A-Za-z0-9]+)\b/);
     if (bv) {
       const pMatch = kw.match(/[?&]p=(\d+)/);
@@ -986,11 +1117,36 @@ const Search = {
     MQTT.publish({ t: 'video-url', url: S.videoUrl, type: 'bili', time: 0, peerPlaying: true, speed: S.playbackSpeed });
   },
 
-  // ====== YouTube ======
+  // ====== b23.tv 短链解析 ======
+  _resolveB23(code) {
+    if (/^BV[A-Za-z0-9]{10}$/.test(code)) return this._loadBili(code);
+    Player._showLoad('解析 b23.tv 短链...');
+    Net.proxyGet('https://b23.tv/' + code, 12000)
+      .then(text => {
+        const m = String(text || '').match(/BV[A-Za-z0-9]{10}/);
+        if (m) {
+          this._loadBili(m[0]);
+        } else {
+          Player._hideLoad();
+          Toast.warn('b23.tv 解析失败，请粘贴完整 bilibili.com/video/BVxxx 链接');
+        }
+      })
+      .catch(() => {
+        Player._hideLoad();
+        Toast.warn('b23.tv 解析失败，请粘贴完整 bilibili.com/video/BVxxx 链接');
+      });
+  },
+
+  // ====== YouTube（iframe + postMessage 同步，与 B站方案一致）======
   _loadYouTube(vid) {
-    Player.embedFrame('https://www.youtube.com/embed/' + vid + '?autoplay=1', 'YouTube');
+    Player.embedYouTube(vid);
     S.videoUrl = 'yt:' + vid;
+    S.videoType = 'youtube';
+    S.videoTitle = S.videoTitle || 'YouTube';
     Playlist.addToPlaylist('yt:'+vid, '🎬 YouTube', 'youtube');
+    Toast.info('YouTube 已加载 · 与好友同步播放');
+    // 通知对方嵌入同一 YouTube 视频（类型必须为 youtube，否则对方会误走 Player.load）
+    MQTT.publish({ t: 'video-url', url: S.videoUrl, type: 'youtube', time: 0, peerPlaying: true, speed: S.playbackSpeed });
   },
 
   // ====== 抖音 ======
@@ -1009,9 +1165,17 @@ const Search = {
           Player.load(videoUrl);
           Playlist.addToPlaylist(videoUrl, '🎵 抖音', 'douyin');
         } else {
-          Player.embedFrame(url, '抖音');
+          this._embedDouyinFallback(url, vid && vid[1]);
         }
-      }).catch(() => { Player._hideLoad(); Toast.error('抖音解析失败'); });
+      }).catch(() => { this._embedDouyinFallback(url, vid && vid[1]); });
+  },
+
+  // 抖音直链解析失败 → 退回分享页 iframe（可能被站点反嵌限制，尽力而为）
+  _embedDouyinFallback(url, id) {
+    Player._hideLoad();
+    const embedSrc = id ? 'https://www.iesdouyin.com/share/video/' + id : url;
+    Player.embedFrame(embedSrc, '抖音');
+    Toast.warn('抖音直链解析失败，已尝试嵌入分享页（可能受限）');
   },
 
   // ---- 多源搜索 ----
@@ -1329,7 +1493,10 @@ const UI = {
       });
       if (tabName === 'chat') {
         S.chatHidden = false; S.unreadChat = 0;
+      } else {
+        S.chatHidden = true;
       }
+      MsgHandler._updateChatBadge();
     };
     tabs.forEach(tab => {
       tab.addEventListener('click', (e) => {
@@ -1374,6 +1541,7 @@ const Room = {
     S.peerVideo = '';
     S.isSyncing = false;
     S.lastSyncRx = 0;
+    S.lastPeerSeen = 0;
     UI.showWatch();
     MQTT.connect(roomId);
     UI.initTheme();
@@ -1392,6 +1560,9 @@ const Room = {
     // 清除 seek 同步等待状态
     S.seekWaitAck = false;
     if (S._seekAckTimer) { clearTimeout(S._seekAckTimer); S._seekAckTimer = null; }
+    // 清除未读聊天
+    S.unreadChat = 0; S.chatHidden = true;
+    MsgHandler._updateChatBadge();
     if (window.innerWidth <= 768) UI._initMobilePanel();
     Playlist._dedupe();
     Playlist.render();
@@ -1513,6 +1684,10 @@ function boot() {
         const bvMatch = it.url.match(/BV([A-Za-z0-9]+)/);
         if (bvMatch) { Search._loadBili(bvMatch[1]); return; }
       }
+      if (it.source === 'youtube' || it.url.indexOf('yt:') === 0) {
+        const ytMatch = it.url.match(/yt:([\w-]+)/);
+        if (ytMatch) { Search._loadYouTube(ytMatch[1]); return; }
+      }
       Search.loadPlayPage(it.url, it.source || 'direct', null);
       S.episodes = [{ label: it.label || 'HD', url: it.url }];
       S.currentEpisode = 0;
@@ -1527,6 +1702,11 @@ function boot() {
   };
   el('chat-btn').addEventListener('click', sendChat);
   el('chat-input').addEventListener('keydown', e => { if (e.key === 'Enter') sendChat(); });
+
+  // 桌面端：查看聊天（点击面板/聚焦输入框）即清除未读徽标
+  const chatPanelEl = el('pnl-chat');
+  if (chatPanelEl) chatPanelEl.addEventListener('click', () => { S.unreadChat = 0; MsgHandler._updateChatBadge(); });
+  el('chat-input').addEventListener('focus', () => { S.unreadChat = 0; MsgHandler._updateChatBadge(); });
 
   // Emoji
   const emojiPicker = el('emoji-picker');
@@ -1776,17 +1956,35 @@ function boot() {
   // ---- Periodic sync (every 8s) —— 定期自检校准 ----
   let _periodicSync = setInterval(() => {
     if (!S.roomId || S.connState !== 'connected' || !S.videoUrl || !S.peerOnline) return;
-    // B站 iframe 模式无 video.duration，直接发同步请求
-    if (Player._mode === 'bili') { MQTT.publish({ t: 'sync-req' }); return; }
+    // iframe 模式（B站/YouTube）无 video.duration，直接发同步请求
+    if (Player._mode !== 'video') { MQTT.publish({ t: 'sync-req' }); return; }
     const v = el('player');
     if (!v || !v.duration || S.isSyncing) return;
     MQTT.publish({ t: 'sync-req' });
   }, 8000);
 
+  // ---- Peer heartbeat（检测对方直接关页/断网，不触发 leave 的离线状态）----
+  let _heartbeat = setInterval(() => {
+    if (!S.roomId || S.connState !== 'connected') return;
+    MQTT.publish({ t: 'ping', name: S.nickname });
+    // 45s 未收到对方任何消息 → 判定离线
+    if (S.peerOnline && S.lastPeerSeen && Date.now() - S.lastPeerSeen > 45000) {
+      S.peerOnline = false;
+      S.peerName = '';
+      const pp = el('peer-presence'); if (pp) pp.classList.add('hidden');
+      const pv = el('peer-video'); if (pv) pv.textContent = '';
+      Log.sys('对方已离线（超时）');
+      Toast.warn('👋 对方已离线');
+      Member.render();
+      MsgHandler._updateOnlineStatus();
+    }
+  }, 15000);
+
   // 离开房间时清理 timer
   const _origDisconnect = MQTT.disconnect.bind(MQTT);
   MQTT.disconnect = function() {
     clearInterval(_periodicSync);
+    clearInterval(_heartbeat);
     _origDisconnect();
   };
 
@@ -1795,11 +1993,11 @@ function boot() {
     // 只在播放页且不在输入框时触发
     if (!S.roomId || document.activeElement.tagName === 'INPUT' || document.activeElement.tagName === 'TEXTAREA') return;
     const v = el('player');
-    // B站 iframe 模式：仅支持 播放/暂停（其余由 iframe 自带控制栏处理）
-    if (Player._mode === 'bili') {
+    // iframe 模式（B站/YouTube）：仅支持 播放/暂停（其余由 iframe 自带控制栏处理）
+    if (Player._mode !== 'video') {
       if (e.key === ' ' || e.key === 'k') {
         e.preventDefault();
-        if (Player._biliPaused) Player.play(); else Player.pause();
+        if (Player.isPaused()) Player.play(); else Player.pause();
       }
       return;
     }

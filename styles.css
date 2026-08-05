@@ -559,12 +559,24 @@ a{color:var(--accent);text-decoration:none}
 
 /* ====== B站 iframe 模式：隐藏 video 专用控件，仅留 同步/停止 ====== */
 .vid-controls.bili-mode #vid-cur,
+.vid-controls.yt-mode #vid-cur,
 .vid-controls.bili-mode #vid-seek,
+.vid-controls.yt-mode #vid-seek,
 .vid-controls.bili-mode #vid-dur,
+.vid-controls.yt-mode #vid-dur,
 .vid-controls.bili-mode #pip-btn,
+.vid-controls.yt-mode #pip-btn,
 .vid-controls.bili-mode #playpause-btn,
+.vid-controls.yt-mode #playpause-btn,
 .vid-controls.bili-mode #fullscreen-btn,
+.vid-controls.yt-mode #fullscreen-btn,
 .vid-controls.bili-mode .vid-ctrl-spacer,
+.vid-controls.yt-mode .vid-ctrl-spacer,
 .vid-controls.bili-mode .vol-group,
-.vid-controls.bili-mode .speed-group{display:none!important}
-.vid-controls.bili-mode{justify-content:flex-end}
+.vid-controls.yt-mode .vol-group,
+.vid-controls.bili-mode .speed-group,
+.vid-controls.yt-mode .speed-group{display:none!important}
+.vid-controls.bili-mode,.vid-controls.yt-mode{justify-content:flex-end}
+
+/* 未读聊天徽标 */
+.tab-badge{display:inline-block;min-width:16px;height:16px;line-height:16px;padding:0 4px;margin-left:4px;border-radius:8px;background:var(--accent);color:#fff;font-size:10px;font-weight:600;text-align:center;vertical-align:middle}
